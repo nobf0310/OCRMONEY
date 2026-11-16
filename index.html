@@ -73,6 +73,10 @@ h3{font-size:16px;margin:0 0 12px}
 details{margin-top:12px}
 summary{font-size:13px;color:#77847c;cursor:pointer}
 pre{white-space:pre-wrap;font-size:12px;color:#55645b;background:#f3f6f4;padding:8px;border-radius:8px}
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;background:#eee;flex:none;cursor:pointer}
+.qty{display:flex;gap:6px;align-items:center;margin-top:6px}
+.qty button{padding:6px 12px}
+.qty input{width:64px;padding:6px;text-align:center}
 footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 #status{line-height:1.6;white-space:pre-wrap}
 </style>
@@ -97,6 +101,10 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 
 <section class="card">
 <h3>① 拍攝商品價牌</h3>
+
+<button class="secondary" id="manual" type="button" style="width:100%;margin-bottom:6px">
+✍️ 手動輸入價格（沒網路或辨識不到時）
+</button>
 
 <label for="language">價牌辨識語言</label>
 <select id="language">
@@ -154,7 +162,7 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 <section class="card hidden" id="edit">
 <h3>② 確認辨識價格</h3>
 
-<label>辨識到的價格（已依字體大小排序）</label>
+<label id="candLabel">辨識到的價格（已依字體大小排序）</label>
 <div id="priceList"></div>
 
 <label>商品單價（可以修改）</label>
@@ -169,6 +177,11 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 
 <label>商品名稱（選填）</label>
 <input id="name" placeholder="例如：洗髮精">
+
+<label id="photoRow" class="hidden" style="font-weight:normal;display:flex;gap:8px;align-items:center;margin-top:14px">
+<input type="checkbox" id="savePhoto" checked style="width:auto">
+📎 把這張照片存到此商品（之後可點開查看牌價）
+</label>
 
 <button class="primary" id="add" style="margin-top:17px">
 ＋ 加入購物清單
@@ -202,7 +215,13 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 <div id="history" style="margin-top:8px"></div>
 </section>
 
-<footer>購物拍照計價器 v2.3 · 本機儲存</footer>
+<div id="lightbox" class="hidden" onclick="this.classList.add('hidden')"
+ style="position:fixed;inset:0;background:#000d;z-index:99;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;gap:10px">
+<img id="lbImg" alt="牌價照片" style="max-width:100%;max-height:85%;border-radius:8px">
+<div style="color:#fff;font-size:13px">點一下關閉</div>
+</div>
+
+<footer>購物拍照計價器 v2.4 · 本機儲存</footer>
 </main>
 
 <script>
@@ -255,6 +274,99 @@ function escapeHTML(s){
  }[c]));
 }
 
+/* ========== 牌價照片（IndexedDB）與數量編輯 ========== */
+
+let dbp=null;
+function idb(){
+ if(dbp)return dbp;
+ dbp=new Promise((res,rej)=>{
+  const r=indexedDB.open('priceScanner',1);
+  r.onupgradeneeded=()=>r.result.createObjectStore('img');
+  r.onsuccess=()=>res(r.result);
+  r.onerror=()=>rej(r.error);
+ });
+ return dbp;
+}
+async function imgPut(id,blob){
+ const db=await idb();
+ return new Promise((res,rej)=>{
+  const t=db.transaction('img','readwrite');
+  t.objectStore('img').put(blob,id);
+  t.oncomplete=res;t.onerror=()=>rej(t.error);
+ });
+}
+async function imgGet(id){
+ const db=await idb();
+ return new Promise((res,rej)=>{
+  const q=db.transaction('img').objectStore('img').get(id);
+  q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);
+ });
+}
+async function imgDel(id){
+ const db=await idb();
+ return new Promise((res,rej)=>{
+  const t=db.transaction('img','readwrite');
+  t.objectStore('img').delete(id);
+  t.oncomplete=res;t.onerror=()=>rej(t.error);
+ });
+}
+
+const imgUrls=new Map();
+
+function dropImg(id){
+ if(!id)return;
+ const u=imgUrls.get(id);
+ if(u){URL.revokeObjectURL(u);imgUrls.delete(id);}
+ imgDel(id).catch(()=>{});
+}
+
+async function hydrateImages(){
+ for(const el of document.querySelectorAll('img[data-img]')){
+  const id=el.dataset.img;
+  try{
+   let u=imgUrls.get(id);
+   if(!u){
+    const b=await imgGet(id);
+    if(!b){el.style.display='none';continue;}
+    u=URL.createObjectURL(b);
+    imgUrls.set(id,u);
+   }
+   el.src=u;
+  }catch(e){el.style.display='none';}
+ }
+}
+
+function makePhotoBlob(img){
+ const sw=img.naturalWidth||img.width,sh=img.naturalHeight||img.height;
+ const r=Math.min(1,1000/Math.max(sw,sh));
+ const c=document.createElement('canvas');
+ c.width=Math.round(sw*r);c.height=Math.round(sh*r);
+ c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+ return new Promise(res=>c.toBlob(b=>res(b),'image/jpeg',0.72));
+}
+
+window.showPhoto=id=>{
+ const u=imgUrls.get(id);
+ if(!u)return;
+ $('lbImg').src=u;
+ $('lightbox').classList.remove('hidden');
+};
+
+window.changeQty=(i,d)=>{
+ const it=items[i];
+ if(!it)return;
+ it.qty=Math.max(1,it.qty+d);
+ render();
+};
+
+window.setQty=(i,v)=>{
+ const it=items[i];
+ if(!it)return;
+ const n=Math.floor(Number(v));
+ if(Number.isFinite(n)&&n>=1)it.qty=n;
+ render();
+};
+
 /* ========== 畫面渲染 ========== */
 
 function render(){
@@ -266,9 +378,15 @@ function render(){
  $('items').innerHTML=items.length?
  items.map((x,i)=>`
  <div class="item">
-  <div style="flex:1">
+  ${x.imgId?`<img class="thumb" data-img="${x.imgId}" alt="牌價照片" onclick="showPhoto('${x.imgId}')">`:''}
+  <div style="flex:1;min-width:0">
    <b>${escapeHTML(x.name||'商品 '+(i+1))}</b>
-   <small>${money(x.price)} × ${x.qty}</small>
+   <small>單價 ${money(x.price)}</small>
+   <div class="qty">
+    <button class="secondary" type="button" onclick="changeQty(${i},-1)">－</button>
+    <input type="number" min="1" step="1" value="${x.qty}" onchange="setQty(${i},this.value)">
+    <button class="secondary" type="button" onclick="changeQty(${i},1)">＋</button>
+   </div>
   </div>
   <div style="text-align:right">
    <b>${money(x.price*x.qty)}</b><br>
@@ -290,7 +408,8 @@ function renderHistory(){
    '<div class="detail">'+
    (h.details||[]).map(x=>`
    <div class="item">
-    <div style="flex:1">
+    ${x.imgId?`<img class="thumb" data-img="${x.imgId}" alt="牌價照片" onclick="showPhoto('${x.imgId}')">`:''}
+    <div style="flex:1;min-width:0">
      <b>${escapeHTML(x.name||'商品')}</b>
      <small>${money(x.price)} × ${x.qty}</small>
     </div>
@@ -318,10 +437,12 @@ function renderHistory(){
   </div>`;
  }).join(''):
  '<div class="muted">還沒有購物紀錄</div>';
+ hydrateImages();
 }
 
 window.removeItem=i=>{
- items.splice(i,1);
+ const it=items.splice(i,1)[0];
+ if(it)dropImg(it.imgId);
  render();
 };
 
@@ -332,6 +453,8 @@ window.toggleDetail=id=>{
 
 window.delRecord=id=>{
  if(!confirm('確定刪除這筆結算紀錄？刪除後無法復原。'))return;
+ const rec=records.find(r=>r.id===id);
+ if(rec)(rec.details||[]).forEach(x=>dropImg(x.imgId));
  records=records.filter(r=>r.id!==id);
  openIds.delete(id);
  saveHistory();
@@ -578,6 +701,8 @@ function labelFor(c,kw){
 }
 
 function renderPriceOptions(){
+ $('candLabel').classList.remove('hidden');
+ $('photoRow').classList.toggle('hidden',!srcImg);
  if(!priceCandidates.length){
   $('priceList').innerHTML='<div class="muted">沒有辨識到價格，請手動輸入。</div>';
   $('price').value='';
@@ -953,7 +1078,7 @@ $('plus').onclick=()=>{
  $('qty').value=(Number($('qty').value)||1)+1;
 };
 
-$('add').onclick=()=>{
+$('add').onclick=async()=>{
  const price=Number($('price').value);
  const qty=Number($('qty').value);
 
@@ -963,7 +1088,18 @@ $('add').onclick=()=>{
   return;
  }
 
- items.push({name:$('name').value.trim(),price,qty});
+ $('add').disabled=true;
+ let imgId=null;
+ if(srcImg&&$('savePhoto').checked){
+  try{
+   const b=await makePhotoBlob(srcImg);
+   const id='p'+Date.now()+Math.random().toString(36).slice(2,6);
+   await imgPut(id,b);
+   imgId=id;
+  }catch(e){console.error(e);}
+ }
+ $('add').disabled=false;
+ items.push({name:$('name').value.trim(),price,qty,imgId});
  render();
 
  $('edit').classList.add('hidden');
@@ -1012,9 +1148,25 @@ $('checkout').onclick=()=>{
 
 $('clear').onclick=()=>{
  if(confirm('確定清空目前購物清單？')){
+  items.forEach(x=>dropImg(x.imgId));
   items=[];
   render();
  }
+};
+
+$('manual').onclick=()=>{
+ priceCandidates=[];
+ $('priceList').innerHTML='';
+ $('raw').textContent='';
+ $('candLabel').classList.add('hidden');
+ $('photoRow').classList.toggle('hidden',!srcImg);
+ $('price').value='';
+ $('qty').value=1;
+ $('name').value='';
+ $('edit').classList.remove('hidden');
+ $('status').textContent='手動輸入模式：請直接輸入價格與數量。';
+ $('edit').scrollIntoView({behavior:'smooth',block:'start'});
+ setTimeout(()=>$('price').focus(),300);
 };
 
 const LANG_CUR={'chi_tra+eng':'NT$','jpn+eng':'¥','kor+eng':'₩','chi_tra+jpn+kor+eng':'NT$'};
