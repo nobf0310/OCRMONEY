@@ -106,6 +106,13 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 <option value="chi_tra+jpn+kor+eng">四種語言全部辨識</option>
 </select>
 
+<label for="currency">幣別（依語言自動帶入，可手動修改）</label>
+<select id="currency">
+<option value="NT$">NT$ 新台幣</option>
+<option value="¥">¥ 日圓</option>
+<option value="₩">₩ 韓元</option>
+</select>
+
 <label for="mode">辨識模式</label>
 <select id="mode">
 <option value="accurate">精準（多種影像處理，較慢）</option>
@@ -195,7 +202,7 @@ footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
 <div id="history" style="margin-top:8px"></div>
 </section>
 
-<footer>購物拍照計價器 v2.2 · 本機儲存</footer>
+<footer>購物拍照計價器 v2.3 · 本機儲存</footer>
 </main>
 
 <script>
@@ -226,10 +233,12 @@ try{
 
 let priceCandidates=[];
 
-const money=n=>'NT$'+Number(n).toLocaleString('zh-TW',{
+let currency='NT$';
+const fmt=(n,c)=>c+Number(n).toLocaleString('zh-TW',{
  minimumFractionDigits:0,
  maximumFractionDigits:2
 });
+const money=n=>fmt(n,currency);
 
 function saveHistory(){
  try{
@@ -276,6 +285,7 @@ function renderHistory(){
  $('history').innerHTML=records.length?
  records.map(h=>{
   const open=openIds.has(h.id);
+  const money=n=>fmt(n,h.cur||'NT$');
   const detail=open?
    '<div class="detail">'+
    (h.details||[]).map(x=>`
@@ -357,20 +367,20 @@ function safeName(s){
 window.exportOne=id=>{
  const h=records.find(r=>r.id===id);
  if(!h)return;
- const rows=[['日期','商品名稱','單價','數量','小計']];
+ const rows=[['日期','幣別','商品名稱','單價','數量','小計']];
  (h.details||[]).forEach(x=>{
-  rows.push([h.date,x.name||'商品',x.price,x.qty,x.price*x.qty]);
+  rows.push([h.date,h.cur||'NT$',x.name||'商品',x.price,x.qty,x.price*x.qty]);
  });
- rows.push([h.date,'合計','',h.pieces,h.total]);
+ rows.push([h.date,h.cur||'NT$','合計','',h.pieces,h.total]);
  downloadCSV('購物紀錄_'+safeName(h.date)+'.csv',rows);
 };
 
 $('exportAll').onclick=()=>{
  if(!records.length){alert('目前沒有歷史紀錄。');return;}
- const rows=[['日期','商品名稱','單價','數量','小計']];
+ const rows=[['日期','幣別','商品名稱','單價','數量','小計']];
  records.forEach(h=>{
   (h.details||[]).forEach(x=>{
-   rows.push([h.date,x.name||'商品',x.price,x.qty,x.price*x.qty]);
+   rows.push([h.date,h.cur||'NT$',x.name||'商品',x.price,x.qty,x.price*x.qty]);
   });
  });
  downloadCSV('購物紀錄_全部明細.csv',rows);
@@ -378,8 +388,8 @@ $('exportAll').onclick=()=>{
 
 $('exportSummary').onclick=()=>{
  if(!records.length){alert('目前沒有歷史紀錄。');return;}
- const rows=[['日期','商品項數','商品總件數','總金額']];
- records.forEach(h=>rows.push([h.date,h.types,h.pieces,h.total]));
+ const rows=[['日期','幣別','商品項數','商品總件數','總金額']];
+ records.forEach(h=>rows.push([h.date,h.cur||'NT$',h.types,h.pieces,h.total]));
  downloadCSV('購物紀錄_結算總表.csv',rows);
 };
 
@@ -437,8 +447,90 @@ function mergeWords(words){
  return out;
 }
 
+function mergeRuns(words){
+ const nums=words.filter(w=>w.bbox&&/\d/.test(w.text||'')&&/^[\d,.¥￥$₩YW]+$/.test((w.text||'').trim()))
+  .sort((a,b)=>a.bbox.x0-b.bbox.x0);
+ const out=[];
+ const mk=(parts,bonus)=>({
+  text:parts.map(p=>p.text.trim()).join(''),
+  confidence:Math.min(...parts.map(p=>p.confidence)),
+  bbox:{x0:parts[0].bbox.x0,x1:parts[parts.length-1].bbox.x1,
+   y0:Math.min(...parts.map(p=>p.bbox.y0)),y1:Math.max(...parts.map(p=>p.bbox.y1))},
+  bonus
+ });
+ const flush=parts=>{
+  if(parts.length<2)return;
+  out.push(mk(parts,1.15));
+  // 第一個片段明顯比其餘矮，多半是貨幣符號被誤判成數字：另外產生「去掉第一個」的版本
+  const hs=parts.map(p=>p.bbox.y1-p.bbox.y0);
+  if(hs[0]<0.8*Math.max(...hs.slice(1)))out.push(mk(parts.slice(1),1.3));
+ };
+ let parts=[];
+ for(const w of nums){
+  if(parts.length){
+   const cb=parts[parts.length-1].bbox,bb=w.bbox;
+   const ch=cb.y1-cb.y0,h=bb.y1-bb.y0,m=Math.max(h,ch);
+   const gap=bb.x0-cb.x1;
+   const dy=Math.abs((bb.y0+bb.y1)/2-(cb.y0+cb.y1)/2);
+   if(gap<m*1.2&&gap>-ch&&dy<m*0.5&&h>ch*0.4&&h<ch*2){parts.push(w);continue;}
+   flush(parts);parts=[];
+  }
+  parts.push(w);
+ }
+ flush(parts);
+ return out;
+}
+
+// 移除表格線、格線（細而長的黑線），避免與數字黏在一起
+function removeLines(g,bin,w,h){
+ const T=Math.max(5,Math.round(Math.max(w,h)*0.004));
+ const L=Math.max(50,Math.round(Math.min(w,h)*0.3));
+ const m=new Uint8Array(w*h);
+ const thin=(x,y,dx,dy)=>{
+  let n=1;
+  for(const sg of [1,-1]){
+   for(let k=1;k<=T+1;k++){
+    const a=y+dy*k*sg,b=x+dx*k*sg;
+    if(a<0||a>=h||b<0||b>=w||bin[a*w+b]!==0)break;
+    n++;
+   }
+  }
+  return n<=T;
+ };
+ for(let y=0;y<h;y++){
+  let x=0;
+  while(x<w){
+   if(bin[y*w+x]!==0){x++;continue;}
+   let e=x;while(e<w&&bin[y*w+e]===0)e++;
+   const len=e-x;
+   if(len>=L&&[.25,.5,.75].every(f=>thin(x+Math.floor(len*f),y,0,1)))
+    for(let k=x;k<e;k++)m[y*w+k]=1;
+   x=e;
+  }
+ }
+ for(let x=0;x<w;x++){
+  let y=0;
+  while(y<h){
+   if(bin[y*w+x]!==0){y++;continue;}
+   let e=y;while(e<h&&bin[e*w+x]===0)e++;
+   const len=e-y;
+   if(len>=L&&[.25,.5,.75].every(f=>thin(x,y+Math.floor(len*f),1,0)))
+    for(let k=y;k<e;k++)m[k*w+x]=1;
+   y=e;
+  }
+ }
+ const o=new Uint8ClampedArray(g);
+ for(let y=1;y<h-1;y++){
+  for(let x=1;x<w-1;x++){
+   const i=y*w+x;
+   if(m[i]||m[i-1]||m[i+1]||m[i-w]||m[i+w])o[i]=255;
+  }
+ }
+ return o;
+}
+
 function collect(words,H,map,minConf){
- words=words.concat(mergeWords(words));
+ words=words.concat(mergeRuns(words));
  const seen=new Set();
  for(const w of words){
   const t=(w.text||'').trim();
@@ -456,7 +548,7 @@ function collect(words,H,map,minConf){
    const v=Number(raw.replace(/,/g,''));
    if(!Number.isFinite(v)||v<1||v>999999)continue;
    if(v<10&&conf<75)continue;                 // 個位數多半是雜訊
-   const s=(h/H)*(0.4+Math.min(conf,100)/100*0.6)*(w.n>1?1.15:1);
+   const s=(h/H)*(0.4+Math.min(conf,100)/100*0.6)*(w.bonus||1);
    const p=map.get(v);
    if(!p){
     map.set(v,{value:v,best:s,votes:1,x0:bb.x0,x1:bb.x1,
@@ -643,7 +735,7 @@ async function getDigitWorker(){
  $('status').textContent=stage;
  digitWorker=await Tesseract.createWorker('eng',1,{logger});
  await digitWorker.setParameters({
-  tessedit_char_whitelist:'0123456789$,.¥￥',
+  tessedit_char_whitelist:'0123456789$,.¥￥₩YW',
   tessedit_pageseg_mode:'11'
  });
  return digitWorker;
@@ -774,7 +866,8 @@ async function runOCR(){
 
   const base=prepare(srcImg,getRect());
   const {w,h}=base;
-  const g=stretch(base.gray);
+  const g0=stretch(base.gray);
+  const g=removeLines(g0,adaptive(g0,w,h,false),w,h);
   const cGray=toCanvas(g,w,h);
   const bin=adaptive(g,w,h,false);
   const cBin=toCanvas(bin,w,h);
@@ -902,6 +995,7 @@ $('checkout').onclick=()=>{
  records.unshift({
   id,
   date:new Date().toLocaleString('zh-TW'),
+  cur:currency,
   total,
   pieces,
   types:items.length,
@@ -923,6 +1017,19 @@ $('clear').onclick=()=>{
  }
 };
 
+const LANG_CUR={'chi_tra+eng':'NT$','jpn+eng':'¥','kor+eng':'₩','chi_tra+jpn+kor+eng':'NT$'};
+$('language').addEventListener('change',()=>{
+ const c=LANG_CUR[$('language').value]||'NT$';
+ if(c===currency)return;
+ if(items.length){
+  $('status').textContent='目前清單已有商品，幣別維持 '+currency+'；如要更換請手動調整幣別，或先結算。';
+  return;
+ }
+ currency=c;$('currency').value=c;render();
+});
+$('currency').addEventListener('change',()=>{
+ currency=$('currency').value;render();
+});
 render();
 </script>
 </body>
