@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#167c55">
+<title>AI 購物拍照計價器</title>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#f3f6f4;color:#24352c;
+ font-family:system-ui,-apple-system,sans-serif
+}
+header{background:#167c55;color:white;padding:20px 18px}
+header h2{margin:0;font-size:21px}
+header p{margin:5px 0 0;font-size:13px;opacity:.9}
+main{max-width:540px;margin:auto;padding:15px}
+.card{
+ background:white;border-radius:15px;padding:17px;
+ margin-bottom:14px;box-shadow:0 2px 9px #0000000c
+}
+.total{background:#e5f5ec}
+.total strong{font-size:32px;color:#167c55}
+.muted{color:#77847c;font-size:13px}
+button{
+ border:0;border-radius:10px;padding:13px 16px;
+ font-size:15px;font-weight:600;cursor:pointer
+}
+button:disabled{opacity:.5;cursor:default}
+.primary{background:#167c55;color:white;width:100%}
+.secondary{background:#e8f2ec;color:#167c55}
+.danger{background:#fff0ed;color:#c44b3d}
+.small{padding:9px 6px;font-size:14px}
+input,select{
+ width:100%;padding:12px;border:1px solid #dce5df;
+ border-radius:9px;font-size:16px;background:white;color:#24352c
+}
+label{display:block;font-size:13px;font-weight:600;margin:13px 0 6px}
+.camera{
+ display:block;background:#e8f5ed;border:2px dashed #80b99a;
+ border-radius:13px;text-align:center;padding:20px 8px;margin:0;
+ cursor:pointer;color:#167c55
+}
+.camera input{display:none}
+#crop{
+ width:100%;border-radius:10px;margin-top:12px;
+ touch-action:none;background:#eee;display:block
+}
+.row{display:flex;gap:9px;align-items:center}
+.row>*{flex:1;min-width:0}
+.hidden{display:none!important}
+h3{font-size:16px;margin:0 0 12px}
+.item{
+ display:flex;justify-content:space-between;gap:10px;
+ padding:12px 0;border-bottom:1px solid #edf0ed
+}
+.item:last-child{border:0}
+.item small{display:block;color:#78847d;margin-top:4px}
+.history-entry{border-bottom:1px solid #eee;padding:14px 0}
+.detail{background:#f7faf8;border-radius:10px;padding:2px 12px;margin-top:10px}
+.price-option{
+ border:1px solid #dce5df;border-radius:10px;
+ padding:10px;margin:7px 0
+}
+.price-option input{width:auto}
+.tag{
+ background:#167c55;color:#fff;border-radius:6px;
+ font-size:11px;padding:2px 6px;margin-left:4px
+}
+details{margin-top:12px}
+summary{font-size:13px;color:#77847c;cursor:pointer}
+pre{white-space:pre-wrap;font-size:12px;color:#55645b;background:#f3f6f4;padding:8px;border-radius:8px}
+footer{text-align:center;color:#9aa49d;font-size:12px;padding:18px}
+#status{line-height:1.6;white-space:pre-wrap}
+</style>
+</head>
+
+<body>
+<header>
+<h2>📷 購物拍照計價器</h2>
+<p>繁體中文・English・日本語・한국어</p>
+</header>
+
+<main>
+
+<section class="card total">
+<div class="muted">目前購物總金額</div>
+<strong id="total">NT$0</strong>
+<div class="row" style="margin-top:8px">
+<div>商品項數：<b id="types">0</b></div>
+<div>商品總件數：<b id="pieces">0</b></div>
+</div>
+</section>
+
+<section class="card">
+<h3>① 拍攝商品價牌</h3>
+
+<label for="language">價牌辨識語言</label>
+<select id="language">
+<option value="chi_tra+eng">繁體中文＋英文</option>
+<option value="jpn+eng">日文＋英文</option>
+<option value="kor+eng">韓文＋英文</option>
+<option value="chi_tra+jpn+kor+eng">四種語言全部辨識</option>
+</select>
+
+<label for="mode">辨識模式</label>
+<select id="mode">
+<option value="accurate">精準（多種影像處理，較慢）</option>
+<option value="fast">快速</option>
+</select>
+
+<p class="muted">
+第一次使用某種語言時，需要下載辨識資料，請保持網路連線。
+拍照時請讓價格盡量佔滿畫面、光線充足、避免反光；拍完後可框選價格區域，辨識會更準。
+</p>
+
+<div class="row">
+<label class="camera">
+<div style="font-size:30px">📸</div>
+<b>拍攝價牌</b>
+<input type="file" id="photoCam" accept="image/*" capture="environment">
+</label>
+<label class="camera">
+<div style="font-size:30px">🖼️</div>
+<b>選擇照片</b>
+<input type="file" id="photoGal" accept="image/*">
+</label>
+</div>
+
+<div id="cropWrap" class="hidden">
+<canvas id="crop"></canvas>
+<div class="muted" style="margin-top:6px">
+用手指在照片上拖曳，框選「價格」所在位置（可略過，略過則辨識整張）。
+</div>
+<div class="row" style="margin-top:10px">
+<button class="secondary" id="clearSel" type="button">清除框選</button>
+<button class="primary" id="go" type="button">開始辨識</button>
+</div>
+</div>
+
+<div id="status" class="muted" style="margin-top:10px"></div>
+</section>
+
+<section class="card hidden" id="edit">
+<h3>② 確認辨識價格</h3>
+
+<label>辨識到的價格（已依字體大小排序）</label>
+<div id="priceList"></div>
+
+<label>商品單價（可以修改）</label>
+<input type="number" id="price" min="0" step="0.01" placeholder="請輸入價格">
+
+<label>購買數量</label>
+<div class="row">
+<button class="secondary" id="minus" type="button">－</button>
+<input type="number" id="qty" min="1" step="1" value="1">
+<button class="secondary" id="plus" type="button">＋</button>
+</div>
+
+<label>商品名稱（選填）</label>
+<input id="name" placeholder="例如：洗髮精">
+
+<button class="primary" id="add" style="margin-top:17px">
+＋ 加入購物清單
+</button>
+
+<details>
+<summary>查看辨識到的原始文字</summary>
+<pre id="raw"></pre>
+</details>
+</section>
+
+<section class="card">
+<h3>③ 已加入購物清單</h3>
+<div id="items"><div class="muted">尚未加入商品</div></div>
+</section>
+
+<button class="primary" id="checkout" style="padding:17px">
+🧾 結算並保存購物紀錄
+</button>
+
+<button class="secondary" id="clear" style="width:100%;margin-top:10px">
+清空目前購物清單
+</button>
+
+<section class="card" style="margin-top:18px">
+<h3>📚 歷史結算紀錄</h3>
+<div class="row">
+<button class="secondary small" id="exportAll">匯出全部明細 CSV</button>
+<button class="secondary small" id="exportSummary">匯出結算總表 CSV</button>
+</div>
+<div id="history" style="margin-top:8px"></div>
+</section>
+
+<footer>購物拍照計價器 v2.2 · 本機儲存</footer>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+
+let items=[];
+let records=[];
+const openIds=new Set();
+
+try{
+ records=JSON.parse(localStorage.getItem('shoppingHistory')||'[]');
+ if(!Array.isArray(records))records=[];
+}catch(e){records=[];}
+
+// 舊紀錄補上唯一 id
+(function(){
+ const used=new Set();
+ let changed=false;
+ records.forEach((h,i)=>{
+  if(typeof h.id!=='number'||used.has(h.id)){
+   h.id=Date.now()+i;
+   changed=true;
+  }
+  used.add(h.id);
+ });
+ if(changed)saveHistory();
+})();
+
+let priceCandidates=[];
+
+const money=n=>'NT$'+Number(n).toLocaleString('zh-TW',{
+ minimumFractionDigits:0,
+ maximumFractionDigits:2
+});
+
+function saveHistory(){
+ try{
+  localStorage.setItem('shoppingHistory',JSON.stringify(records));
+ }catch(e){
+  alert('儲存空間不足，請先匯出歷史紀錄。');
+ }
+}
+
+function escapeHTML(s){
+ return String(s??'').replace(/[&<>"']/g,c=>({
+ '&':'&amp;','<':'&lt;','>':'&gt;',
+ '"':'&quot;',"'":'&#39;'
+ }[c]));
+}
+
+/* ========== 畫面渲染 ========== */
+
+function render(){
+ const total=items.reduce((s,x)=>s+x.price*x.qty,0);
+ $('total').textContent=money(total);
+ $('types').textContent=items.length;
+ $('pieces').textContent=items.reduce((s,x)=>s+x.qty,0);
+
+ $('items').innerHTML=items.length?
+ items.map((x,i)=>`
+ <div class="item">
+  <div style="flex:1">
+   <b>${escapeHTML(x.name||'商品 '+(i+1))}</b>
+   <small>${money(x.price)} × ${x.qty}</small>
+  </div>
+  <div style="text-align:right">
+   <b>${money(x.price*x.qty)}</b><br>
+   <button class="danger" style="padding:5px 9px;margin-top:5px"
+   onclick="removeItem(${i})">刪除</button>
+  </div>
+ </div>`).join(''):
+ '<div class="muted">尚未加入商品</div>';
+
+ renderHistory();
+}
+
+function renderHistory(){
+ $('history').innerHTML=records.length?
+ records.map(h=>{
+  const open=openIds.has(h.id);
+  const detail=open?
+   '<div class="detail">'+
+   (h.details||[]).map(x=>`
+   <div class="item">
+    <div style="flex:1">
+     <b>${escapeHTML(x.name||'商品')}</b>
+     <small>${money(x.price)} × ${x.qty}</small>
+    </div>
+    <b>${money(x.price*x.qty)}</b>
+   </div>`).join('')+
+   `<div class="item"><b>合計</b><b>${money(h.total)}</b></div>
+   </div>`:'';
+  return `
+  <div class="history-entry">
+   <b>${escapeHTML(h.date)}</b>
+   <div style="color:#167c55;font-size:20px;font-weight:bold">
+    ${money(h.total)}
+   </div>
+   <small class="muted">${h.types} 項商品・${h.pieces} 件</small>
+   <div class="row" style="margin-top:8px">
+    <button class="secondary small" onclick="toggleDetail(${h.id})">
+     ${open?'收合明細':'查看明細'}
+    </button>
+    <button class="secondary small" onclick="exportOne(${h.id})">
+     匯出此筆
+    </button>
+    <button class="danger small" onclick="delRecord(${h.id})">刪除</button>
+   </div>
+   ${detail}
+  </div>`;
+ }).join(''):
+ '<div class="muted">還沒有購物紀錄</div>';
+}
+
+window.removeItem=i=>{
+ items.splice(i,1);
+ render();
+};
+
+window.toggleDetail=id=>{
+ if(openIds.has(id))openIds.delete(id);else openIds.add(id);
+ renderHistory();
+};
+
+window.delRecord=id=>{
+ if(!confirm('確定刪除這筆結算紀錄？刪除後無法復原。'))return;
+ records=records.filter(r=>r.id!==id);
+ openIds.delete(id);
+ saveHistory();
+ renderHistory();
+};
+
+/* ========== CSV 匯出 ========== */
+
+function csvCell(v){
+ let s=String(v??'');
+ // 避免名稱以 = + - @ 開頭時被 Excel 當成公式
+ if(typeof v==='string'&&/^[=+\-@\t\r]/.test(s))s="'"+s;
+ return '"'+s.replace(/"/g,'""')+'"';
+}
+
+function downloadCSV(filename,rows){
+ const csv='\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement('a');
+ a.href=url;
+ a.download=filename;
+ document.body.appendChild(a);
+ a.click();
+ a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+
+function safeName(s){
+ return String(s).replace(/[\\\/:*?"<>|\s,]+/g,'-').replace(/^-+|-+$/g,'');
+}
+
+window.exportOne=id=>{
+ const h=records.find(r=>r.id===id);
+ if(!h)return;
+ const rows=[['日期','商品名稱','單價','數量','小計']];
+ (h.details||[]).forEach(x=>{
+  rows.push([h.date,x.name||'商品',x.price,x.qty,x.price*x.qty]);
+ });
+ rows.push([h.date,'合計','',h.pieces,h.total]);
+ downloadCSV('購物紀錄_'+safeName(h.date)+'.csv',rows);
+};
+
+$('exportAll').onclick=()=>{
+ if(!records.length){alert('目前沒有歷史紀錄。');return;}
+ const rows=[['日期','商品名稱','單價','數量','小計']];
+ records.forEach(h=>{
+  (h.details||[]).forEach(x=>{
+   rows.push([h.date,x.name||'商品',x.price,x.qty,x.price*x.qty]);
+  });
+ });
+ downloadCSV('購物紀錄_全部明細.csv',rows);
+};
+
+$('exportSummary').onclick=()=>{
+ if(!records.length){alert('目前沒有歷史紀錄。');return;}
+ const rows=[['日期','商品項數','商品總件數','總金額']];
+ records.forEach(h=>rows.push([h.date,h.types,h.pieces,h.total]));
+ downloadCSV('購物紀錄_結算總表.csv',rows);
+};
+
+/* ========== 價牌分類 / 價格擷取 ========== */
+
+function getLabel(line){
+ if(/會員|会員|회원|member/i.test(line))return '會員價';
+ if(/特價|特价|セール|割引|할인|특가|SALE/i.test(line))return '特價';
+ if(/原價|原价|定価|通常|정가|정상/i.test(line))return '原價';
+ return '辨識價格';
+}
+
+function getWords(data){
+ if(data.words&&data.words.length)return data.words;
+ const out=[];
+ (data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>
+  (p.lines||[]).forEach(l=>(l.words||[]).forEach(w=>out.push(w)))));
+ return out;
+}
+
+function getLines(data){
+ if(data.lines&&data.lines.length)return data.lines;
+ const out=[];
+ (data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>
+  (p.lines||[]).forEach(l=>out.push(l))));
+ return out;
+}
+
+// 從 OCR 單字中收集價格候選：字越大、信心越高、多種處理都讀到，分數越高
+// 把同一行相鄰的數字片段合併（例如 "1" + "990" → 1990），避免千分位逗號讓數字被切開
+function mergeWords(words){
+ const nums=words.filter(w=>w.bbox&&/\d/.test(w.text||'')&&/^[\d,.¥￥$]+$/.test((w.text||'').trim()))
+  .sort((a,b)=>a.bbox.x0-b.bbox.x0);
+ const out=[];
+ let cur=null;
+ for(const w of nums){
+  const bb=w.bbox,h=bb.y1-bb.y0;
+  if(cur){
+   const cb=cur.bbox,ch=cb.y1-cb.y0;
+   const gap=bb.x0-cb.x1;
+   const dy=Math.abs((bb.y0+bb.y1)/2-(cb.y0+cb.y1)/2);
+   const m=Math.max(h,ch);
+   if(gap<m*1.2&&gap>-ch&&dy<m*0.5&&h>ch*0.6&&h<ch*1.6){
+    cur={text:cur.text+w.text.trim(),
+     confidence:Math.min(cur.confidence,w.confidence),
+     bbox:{x0:cb.x0,y0:Math.min(cb.y0,bb.y0),x1:bb.x1,y1:Math.max(cb.y1,bb.y1)},
+     n:cur.n+1};
+    continue;
+   }
+   if(cur.n>1)out.push(cur);
+  }
+  cur={text:w.text.trim(),confidence:w.confidence,bbox:{...bb},n:1};
+ }
+ if(cur&&cur.n>1)out.push(cur);
+ return out;
+}
+
+function collect(words,H,map,minConf){
+ words=words.concat(mergeWords(words));
+ const seen=new Set();
+ for(const w of words){
+  const t=(w.text||'').trim();
+  if(!t||!w.bbox)continue;
+  if(/%|\d\s*[\/:]\s*\d/.test(t))continue;   // 折數、日期、時間
+  const conf=w.confidence??0;
+  if(conf<minConf)continue;
+  const m=t.match(/\d[\d,]*(?:\.\d{1,2})?/g);
+  if(!m)continue;
+  const bb=w.bbox;
+  const h=bb.y1-bb.y0;
+  for(const raw of m){
+   const intPart=raw.split('.')[0].replace(/,/g,'');
+   if(intPart.length>6)continue;              // 條碼、商品編號
+   const v=Number(raw.replace(/,/g,''));
+   if(!Number.isFinite(v)||v<1||v>999999)continue;
+   if(v<10&&conf<75)continue;                 // 個位數多半是雜訊
+   const s=(h/H)*(0.4+Math.min(conf,100)/100*0.6)*(w.n>1?1.15:1);
+   const p=map.get(v);
+   if(!p){
+    map.set(v,{value:v,best:s,votes:1,x0:bb.x0,x1:bb.x1,
+     cy:(bb.y0+bb.y1)/2,h});
+    seen.add(v);
+   }else{
+    if(!seen.has(v)){p.votes++;seen.add(v);}
+    if(s>p.best){
+     p.best=s;p.x0=bb.x0;p.x1=bb.x1;
+     p.cy=(bb.y0+bb.y1)/2;p.h=h;
+    }
+   }
+  }
+ }
+}
+
+// 依位置找附近的「特價／原價／會員價」文字
+function labelFor(c,kw){
+ let best=null,bd=Infinity;
+ for(const k of kw){
+  const ky=(k.bbox.y0+k.bbox.y1)/2;
+  const dy=Math.abs(ky-c.cy);
+  const ov=Math.min(k.bbox.x1,c.x1)-Math.max(k.bbox.x0,c.x0);
+  if(dy<=Math.max(c.h*2.5,60)&&ov>-c.h*3&&dy<bd){bd=dy;best=k;}
+ }
+ return best?best.label:'辨識價格';
+}
+
+function renderPriceOptions(){
+ if(!priceCandidates.length){
+  $('priceList').innerHTML='<div class="muted">沒有辨識到價格，請手動輸入。</div>';
+  $('price').value='';
+  return;
+ }
+
+ $('priceList').innerHTML=priceCandidates.map((x,i)=>`
+ <div class="price-option">
+  <label style="margin:0;cursor:pointer">
+   <input type="radio" name="priceChoice" value="${i}" ${i===0?'checked':''}>
+   ${escapeHTML(x.label)}：<b>${money(x.value)}</b>
+   ${i===0?'<span class="tag">推薦</span>':''}
+  </label>
+ </div>`).join('');
+
+ $('price').value=priceCandidates[0].value;
+
+ document.querySelectorAll('[name="priceChoice"]').forEach(r=>{
+  r.addEventListener('change',()=>{
+   $('price').value=priceCandidates[Number(r.value)].value;
+  });
+ });
+}
+
+/* ========== 影像前處理 ========== */
+
+function prepare(src,rect){
+ const maxSide=Math.max(rect.w,rect.h);
+ let scale=1;
+ if(maxSide>1800)scale=1800/maxSide;
+ else if(maxSide<900)scale=Math.min(3,1400/maxSide);
+ const w=Math.max(1,Math.round(rect.w*scale));
+ const h=Math.max(1,Math.round(rect.h*scale));
+ const c=document.createElement('canvas');
+ c.width=w;c.height=h;
+ const ctx=c.getContext('2d',{willReadFrequently:true});
+ ctx.imageSmoothingQuality='high';
+ ctx.drawImage(src,rect.x,rect.y,rect.w,rect.h,0,0,w,h);
+ const d=ctx.getImageData(0,0,w,h).data;
+ const gray=new Uint8ClampedArray(w*h);
+ const minc=new Uint8ClampedArray(w*h);
+ for(let i=0,j=0;j<gray.length;i+=4,j++){
+  gray[j]=(d[i]*299+d[i+1]*587+d[i+2]*114)/1000;
+  minc[j]=Math.min(d[i],d[i+1],d[i+2]);
+ }
+ return {gray,minc,w,h};
+}
+
+// 對比拉伸
+function stretch(g){
+ const hist=new Uint32Array(256);
+ for(let i=0;i<g.length;i++)hist[g[i]]++;
+ const n=g.length;
+ let acc=0,lo=0,hi=255;
+ for(let i=0;i<256;i++){acc+=hist[i];if(acc>=n*0.01){lo=i;break;}}
+ acc=0;
+ for(let i=255;i>=0;i--){acc+=hist[i];if(acc>=n*0.01){hi=i;break;}}
+ if(hi-lo<20)return g;
+ const o=new Uint8ClampedArray(n);
+ const k=255/(hi-lo);
+ for(let i=0;i<n;i++)o[i]=(g[i]-lo)*k;
+ return o;
+}
+
+// 區域自適應二值化（可處理陰影、不均勻光線）；invert=true 處理「深底白字」
+function adaptive(src,w,h,invert){
+ const W=w+1;
+ const I=new Uint32Array(W*(h+1));
+ for(let y=1;y<=h;y++){
+  let row=0;
+  for(let x=1;x<=w;x++){
+   const p=src[(y-1)*w+(x-1)];
+   row+=invert?255-p:p;
+   I[y*W+x]=I[(y-1)*W+x]+row;
+  }
+ }
+ const r=Math.max(12,Math.round(Math.min(w,h)/14));
+ const out=new Uint8ClampedArray(w*h);
+ for(let y=0;y<h;y++){
+  const y0=Math.max(0,y-r),y1=Math.min(h,y+r+1);
+  for(let x=0;x<w;x++){
+   const x0=Math.max(0,x-r),x1=Math.min(w,x+r+1);
+   const sum=I[y1*W+x1]-I[y0*W+x1]-I[y1*W+x0]+I[y0*W+x0];
+   const mean=sum/((y1-y0)*(x1-x0));
+   const p=src[y*w+x];
+   const v=invert?255-p:p;
+   out[y*w+x]=v<mean-12?0:255;
+  }
+ }
+ return out;
+}
+
+// 加粗黑色筆劃（改善手寫細線條）
+function thicken(bin,w,h,n){
+ let cur=bin;
+ for(let k=0;k<n;k++){
+  const o=new Uint8ClampedArray(cur);
+  for(let y=1;y<h-1;y++){
+   for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    if(cur[i]===255&&
+     (cur[i-1]===0||cur[i+1]===0||cur[i-w]===0||cur[i+w]===0))o[i]=0;
+   }
+  }
+  cur=o;
+ }
+ return cur;
+}
+
+function toCanvas(arr,w,h){
+ const pad=30;
+ const c=document.createElement('canvas');
+ c.width=w+pad*2;c.height=h+pad*2;
+ const ctx=c.getContext('2d');
+ ctx.fillStyle='#fff';
+ ctx.fillRect(0,0,c.width,c.height);
+ const id=ctx.createImageData(w,h);
+ for(let i=0,j=0;i<arr.length;i++,j+=4){
+  id.data[j]=id.data[j+1]=id.data[j+2]=arr[i];
+  id.data[j+3]=255;
+ }
+ ctx.putImageData(id,pad,pad);
+ return c;
+}
+
+/* ========== OCR 辨識器 ========== */
+
+let stage='';
+let textWorker=null,textLang='';
+let digitWorker=null;
+
+const logger=m=>{
+ if(m&&m.status){
+  const pct=m.progress?' '+Math.round(m.progress*100)+'%':'';
+  $('status').textContent=stage+pct;
+ }
+};
+
+async function getTextWorker(){
+ const lang=$('language').value;
+ if(textWorker&&textLang===lang)return textWorker;
+ if(textWorker){await textWorker.terminate();textWorker=null;}
+ stage='正在載入辨識語言資料（第一次可能需要較長時間）…';
+ $('status').textContent=stage;
+ textWorker=await Tesseract.createWorker(lang,1,{logger});
+ await textWorker.setParameters({tessedit_pageseg_mode:'11'});
+ textLang=lang;
+ return textWorker;
+}
+
+// 只認數字的專用辨識器，手寫與特殊字體的準確度明顯較高
+async function getDigitWorker(){
+ if(digitWorker)return digitWorker;
+ stage='正在載入數字辨識引擎…';
+ $('status').textContent=stage;
+ digitWorker=await Tesseract.createWorker('eng',1,{logger});
+ await digitWorker.setParameters({
+  tessedit_char_whitelist:'0123456789$,.¥￥',
+  tessedit_pageseg_mode:'11'
+ });
+ return digitWorker;
+}
+
+/* ========== 照片選取與框選 ========== */
+
+let srcImg=null,disp={r:1,sw:0,sh:0},sel=null,drag=null,busy=false;
+
+async function loadImage(file){
+ if(window.createImageBitmap){
+  try{return await createImageBitmap(file,{imageOrientation:'from-image'});}
+  catch(e){}
+ }
+ return await new Promise((res,rej)=>{
+  const url=URL.createObjectURL(file);
+  const im=new Image();
+  im.onload=()=>{res(im);setTimeout(()=>URL.revokeObjectURL(url),60000);};
+  im.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('load'));};
+  im.src=url;
+ });
+}
+
+function showImage(img){
+ srcImg=img;
+ const sw=img.naturalWidth||img.width;
+ const sh=img.naturalHeight||img.height;
+ const r=Math.min(1,1000/sw);
+ const c=$('crop');
+ c.width=Math.round(sw*r);
+ c.height=Math.round(sh*r);
+ disp={r,sw,sh};
+ sel=null;
+ drawCrop();
+}
+
+function drawCrop(){
+ const c=$('crop'),ctx=c.getContext('2d');
+ ctx.clearRect(0,0,c.width,c.height);
+ ctx.drawImage(srcImg,0,0,c.width,c.height);
+ if(sel){
+  ctx.fillStyle='rgba(0,0,0,.5)';
+  ctx.fillRect(0,0,c.width,sel.y);
+  ctx.fillRect(0,sel.y+sel.h,c.width,c.height-sel.y-sel.h);
+  ctx.fillRect(0,sel.y,sel.x,sel.h);
+  ctx.fillRect(sel.x+sel.w,sel.y,c.width-sel.x-sel.w,sel.h);
+  ctx.strokeStyle='#4ade80';
+  ctx.lineWidth=Math.max(3,c.width/200);
+  ctx.strokeRect(sel.x,sel.y,sel.w,sel.h);
+ }
+}
+
+function cropPoint(e){
+ const c=$('crop'),b=c.getBoundingClientRect();
+ return {
+  x:Math.max(0,Math.min(c.width,(e.clientX-b.left)*c.width/b.width)),
+  y:Math.max(0,Math.min(c.height,(e.clientY-b.top)*c.height/b.height))
+ };
+}
+
+$('crop').addEventListener('pointerdown',e=>{
+ if(!srcImg)return;
+ e.preventDefault();
+ $('crop').setPointerCapture(e.pointerId);
+ drag=cropPoint(e);
+ sel=null;
+});
+
+$('crop').addEventListener('pointermove',e=>{
+ if(!drag)return;
+ const p=cropPoint(e);
+ sel={
+  x:Math.min(drag.x,p.x),y:Math.min(drag.y,p.y),
+  w:Math.abs(p.x-drag.x),h:Math.abs(p.y-drag.y)
+ };
+ drawCrop();
+});
+
+function endDrag(){
+ if(!drag)return;
+ drag=null;
+ if(sel&&(sel.w<20||sel.h<20))sel=null;
+ drawCrop();
+}
+$('crop').addEventListener('pointerup',endDrag);
+$('crop').addEventListener('pointercancel',endDrag);
+
+$('clearSel').onclick=()=>{sel=null;if(srcImg)drawCrop();};
+
+function getRect(){
+ if(sel){
+  return {x:sel.x/disp.r,y:sel.y/disp.r,w:sel.w/disp.r,h:sel.h/disp.r};
+ }
+ return {x:0,y:0,w:disp.sw,h:disp.sh};
+}
+
+async function onFile(e){
+ const file=e.target.files[0];
+ if(!file)return;
+ try{
+  const img=await loadImage(file);
+  showImage(img);
+  $('cropWrap').classList.remove('hidden');
+  $('edit').classList.add('hidden');
+  $('status').textContent='請框選價格區域（可略過），再按「開始辨識」。';
+ }catch(err){
+  $('status').textContent='無法讀取這張照片，請換一張再試。';
+ }finally{
+  e.target.value='';
+ }
+}
+$('photoCam').addEventListener('change',onFile);
+$('photoGal').addEventListener('change',onFile);
+
+/* ========== 開始辨識 ========== */
+
+async function runOCR(){
+ if(!srcImg||busy)return;
+ busy=true;
+ $('go').disabled=true;
+
+ try{
+  const accurate=$('mode').value==='accurate';
+
+  stage='影像處理中…';
+  $('status').textContent=stage;
+  await new Promise(r=>setTimeout(r,30));
+
+  const base=prepare(srcImg,getRect());
+  const {w,h}=base;
+  const g=stretch(base.gray);
+  const cGray=toCanvas(g,w,h);
+  const bin=adaptive(g,w,h,false);
+  const cBin=toCanvas(bin,w,h);
+  const H=cGray.height;
+
+  const passes=[];
+  if(accurate){
+   passes.push(['灰階強化',cGray]);
+   passes.push(['二值化',cBin]);
+   passes.push(['加粗筆劃',toCanvas(thicken(bin,w,h,2),w,h)]);
+   passes.push(['反白文字',toCanvas(adaptive(g,w,h,true),w,h)]);
+   passes.push(['色彩分離',toCanvas(adaptive(stretch(base.minc),w,h,true),w,h)]);
+  }else{
+   passes.push(['二值化',cBin]);
+  }
+  const N=1+passes.length;
+
+  const map=new Map();
+  const kw=[];
+  const raws=[];
+
+  // 第 1 步：一般文字辨識（取得「特價／原價」等字樣與位置）
+  const tw=await getTextWorker();
+  stage='辨識價牌文字（1/'+N+'）';
+  $('status').textContent=stage;
+  const r1=await tw.recognize(cGray);
+  raws.push(r1.data.text||'');
+  getLines(r1.data).forEach(l=>{
+   const lab=getLabel(l.text||'');
+   if(lab!=='辨識價格'&&l.bbox)kw.push({bbox:l.bbox,label:lab});
+  });
+  collect(getWords(r1.data),H,map,40);
+
+  // 之後：數字專用辨識（多種影像處理）
+  const dw=await getDigitWorker();
+  for(let i=0;i<passes.length;i++){
+   stage='辨識數字・'+passes[i][0]+'（'+(i+2)+'/'+N+'）';
+   $('status').textContent=stage;
+   const r=await dw.recognize(passes[i][1]);
+   raws.push('['+passes[i][0]+'] '+(r.data.text||'').trim());
+   collect(getWords(r.data),H,map,30);
+  }
+
+  const cands=[...map.values()]
+   .map(c=>({...c,score:c.best*(1+0.3*(c.votes-1))}))
+   .sort((a,b)=>b.score-a.score)
+   .slice(0,8);
+  cands.forEach(c=>{c.label=labelFor(c,kw);});
+
+  priceCandidates=cands.map(c=>({value:c.value,label:c.label}));
+  renderPriceOptions();
+  $('raw').textContent=raws.join('\n---\n');
+  $('edit').classList.remove('hidden');
+
+  $('status').textContent=priceCandidates.length?
+   '辨識完成！找到 '+priceCandidates.length+
+   ' 個候選價格，第一個是畫面中最大、最可能的價格。請核對原價、特價及會員價。':
+   '沒有找到明確價格，請嘗試框選價格區域重新辨識，或手動輸入。';
+
+  $('qty').value=1;
+  $('name').value='';
+ }catch(err){
+  console.error(err);
+  $('status').textContent=
+   '辨識失敗，請確認網路連線或重新拍攝。也可以手動輸入價格。';
+  priceCandidates=[];
+  renderPriceOptions();
+  $('edit').classList.remove('hidden');
+ }finally{
+  busy=false;
+  $('go').disabled=false;
+ }
+}
+$('go').onclick=runOCR;
+
+/* ========== 數量、加入、結算 ========== */
+
+$('minus').onclick=()=>{
+ $('qty').value=Math.max(1,(Number($('qty').value)||1)-1);
+};
+
+$('plus').onclick=()=>{
+ $('qty').value=(Number($('qty').value)||1)+1;
+};
+
+$('add').onclick=()=>{
+ const price=Number($('price').value);
+ const qty=Number($('qty').value);
+
+ if(!Number.isFinite(price)||price<=0||
+ !Number.isInteger(qty)||qty<1){
+  alert('請輸入正確的價格及數量。');
+  return;
+ }
+
+ items.push({name:$('name').value.trim(),price,qty});
+ render();
+
+ $('edit').classList.add('hidden');
+ $('cropWrap').classList.add('hidden');
+ srcImg=null;sel=null;
+ $('status').textContent='商品已加入，可以繼續拍攝下一項商品。';
+
+ window.scrollTo({top:0,behavior:'smooth'});
+};
+
+$('checkout').onclick=()=>{
+ if(!items.length){
+  alert('目前沒有商品，請先加入商品。');
+  return;
+ }
+
+ const total=items.reduce((s,x)=>s+x.price*x.qty,0);
+ const pieces=items.reduce((s,x)=>s+x.qty,0);
+
+ if(!confirm(
+  `購物結算\n\n商品項數：${items.length}\n`+
+  `商品總件數：${pieces}\n總金額：${money(total)}\n\n`+
+  '確認結算並保存紀錄？'
+ ))return;
+
+ let id=Date.now();
+ while(records.some(r=>r.id===id))id++;
+
+ records.unshift({
+  id,
+  date:new Date().toLocaleString('zh-TW'),
+  total,
+  pieces,
+  types:items.length,
+  details:items.map(x=>({...x}))
+ });
+ saveHistory();
+
+ items=[];
+ render();
+
+ $('status').textContent='結算完成！歷史紀錄已保存。';
+ window.scrollTo({top:0,behavior:'smooth'});
+};
+
+$('clear').onclick=()=>{
+ if(confirm('確定清空目前購物清單？')){
+  items=[];
+  render();
+ }
+};
+
+render();
+</script>
+</body>
+</html>
